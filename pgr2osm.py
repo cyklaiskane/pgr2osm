@@ -34,8 +34,9 @@ async def add_way(xf, record, line):
 async def iterate_vertices(pool, xf):
     async with pool.acquire() as con, con.transaction():
         async for record in con.cursor('''
-            SELECT id, ST_Transform(the_geom, 4326) as geom
-            FROM nvdb_skane_network_vertices_pgr LIMIT 50000
+            SELECT id, the_geom as geom
+            FROM nvdb_skane_network_vertices_pgr
+            LIMIT 5
         '''):
             await add_node(xf, record['id'], record['geom'])
 
@@ -44,12 +45,32 @@ async def iterate_edges(pool, xf):
     async with pool.acquire() as con, con.transaction():
         async for record in con.cursor('''
             SELECT
-                *,
                 objectid as id,
-                ST_Transform(ST_LineMerge(geom), 4326) as line_geom
-            FROM nvdb_skane_network LIMIT 50000
+                road_name as name,
+                CASE
+                    WHEN road_type = 2 THEN 'cycleway'
+                    WHEN motorway THEN 'motorway'
+                    WHEN motorroad THEN 'trunk'
+                    WHEN road_class = 1 THEN 'trunk'
+                    WHEN road_class = 2 THEN 'primary'
+                    WHEN road_class < 5 THEN 'secondary'
+                    WHEN road_class < 6 THEN 'tertiary'
+                    WHEN road_class < 8 AND residential THEN 'residential'
+                    WHEN road_class < 8 THEN 'unclassified'
+                    WHEN road_class = 9 AND surface = 2 THEN 'track'
+                    ELSE 'service'
+                END as highway,
+                width,
+                max_speed as maxspeed,
+                surface_name as surface,
+                geom,
+                source, target
+            FROM nvdb_skane_network
+            LEFT JOIN (VALUES (1, 'paved'), (2, 'unpaved')) AS surfaces (surface, surface_name) USING (surface)
+            LIMIT 10
         '''):
-            await add_way(xf, record, record['line_geom'])
+            log.debug(record)
+            await add_way(xf, record, record['geom'])
 
 
 async def run():
