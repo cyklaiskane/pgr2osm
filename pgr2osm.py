@@ -35,7 +35,7 @@ async def iterate_vertices(pool, xf):
     async with pool.acquire() as con, con.transaction():
         async for record in con.cursor('''
             SELECT id, ST_Transform(the_geom, 4326) as geom
-            FROM nvdb_skane_network_vertices_pgr LIMIT 10000
+            FROM nvdb_skane_network_vertices_pgr LIMIT 50000
         '''):
             await add_node(xf, record['id'], record['geom'])
 
@@ -47,7 +47,7 @@ async def iterate_edges(pool, xf):
                 *,
                 objectid as id,
                 ST_Transform(ST_LineMerge(geom), 4326) as line_geom
-            FROM nvdb_skane_network LIMIT 10000
+            FROM nvdb_skane_network LIMIT 50000
         '''):
             await add_way(xf, record, record['line_geom'])
 
