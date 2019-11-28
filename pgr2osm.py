@@ -6,22 +6,20 @@ import lxml.etree as etree
 from postgis.asyncpg import register
 
 
-async def add_node(elem, id, point):
-    node = etree.Element('node', {
+async def add_node(xf, id, point):
+    await xf.write(etree.Element('node', {
         'id': str(id),
         'lat': str(point.y),
         'lon': str(point.x)
-    })
-    await elem.write(node)
-    node = None
+    }))
 
 
-async def add_way(elem, record, line):
+async def add_way(xf, record, line):
     way = etree.Element('way', {'id': str(record['id'])})
     etree.SubElement(way, 'nd', {'ref': str(record['source'])})
     nid = record['id'] * -1000
     for point in line[1:-1]:
-        await add_node(elem, nid, point)
+        await add_node(xf, nid, point)
         etree.SubElement(way, 'nd', {'ref': str(nid)})
         nid -= 1
     etree.SubElement(way, 'nd', {'ref': str(record['target'])})
@@ -29,20 +27,20 @@ async def add_way(elem, record, line):
     tags = {k: v for k, v in record.items() if k not in exclude and v is not None}
     for k, v in tags.items():
         etree.SubElement(way, 'tag', {'k': k, 'v': str(v)})
-    await elem.write(way)
+    await xf.write(way)
     way = None
 
 
-async def iterate_vertices(pool, elem):
+async def iterate_vertices(pool, xf):
     async with pool.acquire() as con, con.transaction():
         async for record in con.cursor('''
             SELECT id, ST_Transform(the_geom, 4326) as geom
             FROM nvdb_skane_network_vertices_pgr LIMIT 10000
         '''):
-            await add_node(elem, record['id'], record['geom'])
+            await add_node(xf, record['id'], record['geom'])
 
 
-async def iterate_edges(pool, elem):
+async def iterate_edges(pool, xf):
     async with pool.acquire() as con, con.transaction():
         async for record in con.cursor('''
             SELECT
@@ -51,7 +49,7 @@ async def iterate_edges(pool, elem):
                 ST_Transform(ST_LineMerge(geom), 4326) as line_geom
             FROM nvdb_skane_network LIMIT 10000
         '''):
-            await add_way(elem, record, record['line_geom'])
+            await add_way(xf, record, record['line_geom'])
 
 
 async def run():
