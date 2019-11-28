@@ -1,11 +1,7 @@
-import sys
-import io
 import asyncio
 import asyncpg
 import logging
-import postgis
 import lxml.etree as etree
-import xml.etree.ElementTree as ET
 
 from postgis.asyncpg import register
 
@@ -18,6 +14,7 @@ async def add_node(elem, id, point):
     })
     await elem.write(node)
     node = None
+
 
 async def add_way(elem, record, line):
     way = etree.Element('way', {'id': str(record['id'])})
@@ -36,12 +33,11 @@ async def add_way(elem, record, line):
     way = None
 
 
-
 async def iterate_vertices(pool, elem):
     async with pool.acquire() as con, con.transaction():
         async for record in con.cursor('''
             SELECT id, ST_Transform(the_geom, 4326) as geom
-            FROM nvdb_skane_network_vertices_pgr
+            FROM nvdb_skane_network_vertices_pgr LIMIT 10000
         '''):
             await add_node(elem, record['id'], record['geom'])
 
@@ -53,7 +49,7 @@ async def iterate_edges(pool, elem):
                 *,
                 objectid as id,
                 ST_Transform(ST_LineMerge(geom), 4326) as line_geom
-            FROM nvdb_skane_network
+            FROM nvdb_skane_network LIMIT 10000
         '''):
             await add_way(elem, record, record['line_geom'])
 
