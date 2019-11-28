@@ -97,10 +97,14 @@ class AsyncXmlOut(object):
         pass
 
 
-logging.getLogger("asyncio").setLevel(logging.DEBUG)
+
+
+log = logging.getLogger('pgr2osm')
+log.setLevel(logging.DEBUG)
 
 loop = asyncio.get_event_loop()
 loop.set_debug(True)
+logging.getLogger('asyncio').setLevel(logging.DEBUG)
 loop.run_until_complete(run())
 
 """
