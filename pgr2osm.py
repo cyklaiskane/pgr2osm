@@ -56,7 +56,7 @@ async def run():
     pool = await asyncpg.create_pool(database='gis', loop=loop, init=register,
                                      min_size=5, max_size=10)
 
-    async with etree.xmlfile(AsyncXmlOut()) as xf, xf.element('osm', {
+    async with etree.xmlfile(AsyncXmlOut(), encoding='UTF-8') as xf, xf.element('osm', {
         'version': '0.6', 'upload': 'false', 'generator': 'pgr2osm'
     }):
         await asyncio.gather(iterate_vertices(pool, xf),
