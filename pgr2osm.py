@@ -1,9 +1,93 @@
 import asyncio
+import uvloop
 import asyncpg
 import logging
+import json
 import lxml.etree as etree
 
 from postgis.asyncpg import register
+
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+logging.basicConfig(level=logging.DEBUG)
+
+VEHICLES = {
+    1: 'emergency',  # ambulans
+    2: 'vehicle',  # anläggningens fordon
+    3: 'vehicle',  # arbetsfordon
+    5: 'vehicle',  # beskickningsfordon
+    6: 'share_taxi',  # beställd taxi
+    7: 'vehicle',  # besökare
+    10: 'motorcar',  # bil
+    13: 'motorcar',  # bilägare med arrendekontrakt
+    15: 'coach',  # bokbuss
+    20: 'bus',  # buss
+    30: 'bicycle',  # cykel
+    35: 'trailer',  # efterfordon
+    40: 'vehicle',  # fordon
+    44: 'hgv_articulated',  # fordon eller fordonståg vars längd, lasten inräknad, överstiger 10 meter
+    45: 'vehicle',  # fordon enligt beskrivning
+    50: 'bus',  # fordon i linjetrafik
+    51: 'bus',  # fordon i linjetrafik vid på‐och avstigning
+    65: 'vehicle',  # fordon med särskilt tillstånd
+    70: 'disabled',  # fordon som används av rörelsehindrade med särskilt tillstånd
+    71: 'goods',  # fordon som används för distribution av post
+    73: 'atv',  # fyrhjulig moped
+    75: 'disabled',  # färdtjänstfordon
+    77: 'goods',  # godstransporter
+    80: 'horse',  # hästfordon
+    85: 'vehicle',  # kommunens servicefordon
+    90: 'hgv',  # lastbil
+    91: 'hgv',  # lastbil vid på‐och avlastning
+    95: 'hgv',  # 2‐axlig lastbil
+    100: 'goods',  # lätt lastbil
+    105: 'motorcycle',  # lätt motorcykel
+    110: 'atv',  # lätt terrängvagn
+    120: 'moped',  # moped
+    130: 'mofa',  # moped klass I
+    140: 'moped',  # moped klass II
+    150: 'motorcycle',  # motorcykel
+    170: 'motor_vehicle',  # motordrivna fordon
+    175: 'motor_vehicle',  # motorfordon
+    180: 'agricultural',  # motorredskap
+    190: 'agricultural',  # motorredskap klass I
+    200: 'agricultural',  # motorredskap klass II
+    210: 'motorcar',  # personbil
+    500: 'goods',  # på‐eller avlastning av gods
+    510: 'psv',  # på‐eller avstigning
+    520: 'trailer',  # påhängsvagn
+    215: 'hgv',  # renhållningsbil
+    530: 'psv',  # skolskjuts
+    540: 'trailer',  # släpkärra
+    550: 'trailer',  # släpvagn
+    220: 'taxi',  # taxi
+    230: 'atv',  # terrängmotorfordon
+    240: 'atv',  # terrängmotorfordon och terrängsläp
+    250: 'snowmobile',  # terrängskoter
+    255: 'atv',  # terrängsläp
+    260: 'atv',  # terrängvagn
+    265: 'vehicle',  # trafik
+    270: 'agricultural',  # traktor
+    272: 'goods',  # transporter
+    274: 'moped',  # trehjulig moped
+    276: 'agricultural',  # truck
+    280: 'hgv',  # tung lastbil
+    285: 'motorcycle',  # tung motorcykel
+    290: 'agricultural',  # tung terrängvagn
+    300: 'emergency',  # utryckningsfordon
+    9999: 'vehicle',  # okänt
+}
+
+ACTIVITY = {
+    10: 'permissive',  # anläggningsarbeten
+    20: 'private',  # boende inom området
+    50: 'destination',  # färdtjänst
+    70: 'delivery',  # på-eller avlastning av gods
+    80: 'destination',  # på-eller avstigning
+    120: 'destination',  # transport
+    160: 'permissive',  # underhållsarbeten
+    170: 'delivery',  # varuleveranser
+    180: 'permissive',  # verksamhet enligt beskrivning
+}
 
 
 async def add_node(xf, id, point):
@@ -12,6 +96,22 @@ async def add_node(xf, id, point):
         'lat': str(point.y),
         'lon': str(point.x)
     }))
+
+
+def get_access(items):
+    directions = ['', ':forward', ':backward', '']
+    tags = {}
+    for item in items:
+        key = VEHICLES.get(item['vehicle_deny'], 'vehicle')
+        key += directions[item['direction']]
+        value = 'destination' if item['dest_allow'] else 'no'
+        value = ACTIVITY.get(item['activity_allow'], value)
+        tags[key] = value
+        if item['vehicle_allow']:
+            key = VEHICLES.get(item['vehicle_allow'], 'vehicle')
+            key += directions[item['direction']]
+            tags[key] = 'yes'
+    return tags
 
 
 async def add_way(xf, record, line):
@@ -23,8 +123,12 @@ async def add_way(xf, record, line):
         etree.SubElement(way, 'nd', {'ref': str(nid)})
         nid -= 1
     etree.SubElement(way, 'nd', {'ref': str(record['target'])})
-    exclude = ['id', 'geom', 'objectid', 'line_geom', 'source', 'target']
-    tags = {k: v for k, v in record.items() if k not in exclude and v is not None}
+    exclude = ['id', 'geom', 'source', 'target', 'access_json']
+    tags = {}
+    if record['access_json'] is not None:
+        items = json.loads(record['access_json'])
+        tags.update(get_access(items))
+    tags.update({k: v for k, v in record.items() if k not in exclude and v is not None})
     for k, v in tags.items():
         etree.SubElement(way, 'tag', {'k': k, 'v': str(v)})
     await xf.write(way)
@@ -36,7 +140,8 @@ async def iterate_vertices(pool, xf):
         async for record in con.cursor('''
             SELECT id, the_geom as geom
             FROM nvdb_skane_network_vertices_pgr
-            LIMIT 5
+            --WHERE st_intersects(the_geom, st_buffer(st_setsrid(st_makepoint(13.357, 55.657), 4326),0.015))
+            --LIMIT 10
         '''):
             await add_node(xf, record['id'], record['geom'])
 
@@ -61,19 +166,27 @@ async def iterate_edges(pool, xf):
                     ELSE 'service'
                 END as highway,
                 width,
+                CASE oneway
+                    WHEN 1 THEN '-1'
+                    WHEN 2 THEN 'yes'
+                    ELSE NULL
+                END as oneway,
+                road_access as access_json,
+                CASE WHEN cycleroad THEN 'designated' ELSE NULL END as bicycle,
                 max_speed as maxspeed,
                 surface_name as surface,
                 geom,
                 source, target
             FROM nvdb_skane_network
             LEFT JOIN (VALUES (1, 'paved'), (2, 'unpaved')) AS surfaces (surface, surface_name) USING (surface)
-            LIMIT 10
+            --WHERE st_intersects(geom, st_buffer(st_setsrid(st_makepoint(13.357, 55.657), 4326),0.01))
+            --WHERE oneway IS NOT NULL OR road_access IS NOT NULL LIMIT 50
         '''):
-            log.debug(record)
             await add_way(xf, record, record['geom'])
 
 
 async def run():
+    log.debug('Hej')
     pool = await asyncpg.create_pool(database='gis', loop=loop, init=register,
                                      min_size=5, max_size=10)
 
@@ -97,14 +210,11 @@ class AsyncXmlOut(object):
         pass
 
 
-
-
 log = logging.getLogger('pgr2osm')
 log.setLevel(logging.DEBUG)
 
 loop = asyncio.get_event_loop()
-loop.set_debug(True)
-logging.getLogger('asyncio').setLevel(logging.DEBUG)
+#loop.set_debug(True)
 loop.run_until_complete(run())
 
 """
