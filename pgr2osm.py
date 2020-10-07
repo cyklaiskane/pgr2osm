@@ -138,7 +138,7 @@ async def add_way(xf, record, line):
 async def iterate_vertices(pool, xf):
     async with pool.acquire() as con, con.transaction():
         async for record in con.cursor('''
-            SELECT id, the_geom as geom
+            SELECT id, st_transform(the_geom, 4326) as geom
             FROM nvdb_skane_network_vertices_pgr
             --WHERE st_intersects(the_geom, st_buffer(st_setsrid(st_makepoint(13.357, 55.657), 4326),0.015))
             --LIMIT 10
@@ -172,11 +172,12 @@ async def iterate_edges(pool, xf):
                     ELSE NULL
                 END as oneway,
                 road_access as access_json,
-                CASE WHEN cycleroad THEN 'designated' ELSE NULL END as bicycle,
+                CASE WHEN bicycleroad THEN 'designated' ELSE NULL END as bicycle,
                 max_speed as maxspeed,
                 surface_name as surface,
-                geom,
-                source, target
+                st_transform(geom, 4326) geom,
+                from_vertex source,
+                to_vertex target
             FROM nvdb_skane_network
             LEFT JOIN (VALUES (1, 'paved'), (2, 'unpaved')) AS surfaces (surface, surface_name) USING (surface)
             --WHERE st_intersects(geom, st_buffer(st_setsrid(st_makepoint(13.357, 55.657), 4326),0.01))
