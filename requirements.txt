@@ -1,3 +1,4 @@
 asyncpg
 postgis
 uvloop
+lxml
