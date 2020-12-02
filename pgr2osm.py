@@ -187,7 +187,6 @@ async def iterate_edges(pool, xf):
 
 
 async def run():
-    log.debug('Hej')
     pool = await asyncpg.create_pool(database='gis', loop=loop, init=register,
                                      min_size=5, max_size=10)
 
